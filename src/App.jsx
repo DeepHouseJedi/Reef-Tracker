@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Activity, Droplets, Download, Plus, Trash2, Waves } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Activity, Droplets, Download, Plus, Trash2, Upload, Waves } from 'lucide-react';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 const STORAGE_KEY = 'reef-tank-tracker-entries-v3';
@@ -79,6 +79,7 @@ export default function App() {
   const [selectedParam, setSelectedParam] = useState('alk');
   const [tab, setTab] = useState('log');
   const [message, setMessage] = useState('');
+  const fileInputRef = useRef(null);
   const [form, setForm] = useState({
     date: getLocalDateTime(),
     alk: '',
@@ -192,10 +193,7 @@ export default function App() {
       nitrate: '',
       notes: '',
     });
-    setMessage('Reading saved.');
-    window.setTimeout(() => {
-      setMessage('');
-    }, 3000);
+    showMessage('Reading saved.');
   }
 
   function removeEntry(id) {
@@ -204,6 +202,83 @@ export default function App() {
 
   function resetEntries() {
     if (confirm('Reset all readings and restore sample data?')) setEntries(sampleEntries);
+  }
+
+
+  function showMessage(text) {
+    setMessage(text);
+    window.setTimeout(() => {
+      setMessage('');
+    }, 3000);
+  }
+
+  function normalizeImportedEntry(entry, index) {
+    const normalized = {
+      id: entry.id ?? `${Date.now()}-${index}`,
+      date: entry.date ?? entry.reading_time ?? entry.created_at ?? getLocalDateTime(),
+      notes: entry.notes ?? '',
+    };
+
+    PARAMS.forEach(param => {
+      const value = entry[param.key];
+      normalized[param.key] =
+        value === null || value === undefined || value === '' ? null : Number(value);
+    });
+
+    const hasAtLeastOneParam = PARAMS.some(param => normalized[param.key] !== null && Number.isFinite(normalized[param.key]));
+    if (!hasAtLeastOneParam) return null;
+
+    PARAMS.forEach(param => {
+      if (!Number.isFinite(normalized[param.key])) normalized[param.key] = null;
+    });
+
+    return normalized;
+  }
+
+  function importJson(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        const rawEntries = Array.isArray(parsed) ? parsed : parsed.entries;
+
+        if (!Array.isArray(rawEntries)) {
+          showMessage('Import failed. File must contain a readings array.');
+          return;
+        }
+
+        const importedEntries = rawEntries
+          .map((entry, index) => normalizeImportedEntry(entry, index))
+          .filter(Boolean);
+
+        if (!importedEntries.length) {
+          showMessage('No valid readings found in that file.');
+          return;
+        }
+
+        const shouldReplace = window.confirm(
+          `Import ${importedEntries.length} readings?\n\nOK = replace current readings\nCancel = add them to current readings`
+        );
+
+        if (shouldReplace) {
+          setEntries(importedEntries);
+          showMessage(`Imported ${importedEntries.length} readings.`);
+        } else {
+          setEntries(prev => [...prev, ...importedEntries]);
+          showMessage(`Added ${importedEntries.length} imported readings.`);
+        }
+      } catch {
+        showMessage('Import failed. Please choose a valid JSON backup file.');
+      } finally {
+        event.target.value = '';
+      }
+    };
+
+    reader.readAsText(file);
   }
 
   function exportJson() {
@@ -226,6 +301,14 @@ export default function App() {
           <p className="save-note">Readings save automatically on this device.</p>
           <div className="actions">
             <Button className="secondary" onClick={exportJson}><Download size={16} /> Export data</Button>
+            <Button className="secondary" onClick={() => fileInputRef.current?.click()}><Upload size={16} /> Import data</Button>
+            <input
+              ref={fileInputRef}
+              className="file-input"
+              type="file"
+              accept="application/json,.json"
+              onChange={importJson}
+            />
           </div>
         </div>
         <Card className="latest">
